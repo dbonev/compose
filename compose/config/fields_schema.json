@@ -18,6 +18,7 @@
 
       "properties": {
         "build": {"type": "string"},
+        "image_name": {"type": "string"},
         "cap_add": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
         "cap_drop": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
         "cgroup_parent": {"type": "string"},

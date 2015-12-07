@@ -699,7 +699,10 @@ class Service(object):
         """
         The tag to give to images built for this service.
         """
-        return '%s_%s' % (self.project, self.name)
+        if 'image_name' in self.options:
+            return self.options['image_name']
+        else:
+            return '%s_%s' % (self.project, self.name)
 
     def labels(self, one_off=False):
         return [
