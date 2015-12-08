@@ -8,11 +8,12 @@ import sys
 from inspect import getdoc
 from operator import attrgetter
 
+import yaml
 from docker.errors import APIError
 from requests.exceptions import ReadTimeout
 
 from .. import __version__
-from .. import legacy
+from ..config import config
 from ..config import ConfigurationError
 from ..config import parse_environment
 from ..const import DEFAULT_TIMEOUT
@@ -24,6 +25,7 @@ from ..service import BuildError
 from ..service import ConvergenceStrategy
 from ..service import NeedsBuildError
 from .command import friendly_error_message
+from .command import get_config_path_from_options
 from .command import project_from_options
 from .docopt_command import DocoptCommand
 from .docopt_command import NoSuchCommand
@@ -41,11 +43,6 @@ if not IS_WINDOWS_PLATFORM:
 log = logging.getLogger(__name__)
 console_handler = logging.StreamHandler(sys.stderr)
 
-INSECURE_SSL_WARNING = """
---allow-insecure-ssl is deprecated and has no effect.
-It will be removed in a future version of Compose.
-"""
-
 
 def main():
     setup_logging()
@@ -55,7 +52,7 @@ def main():
     except KeyboardInterrupt:
         log.error("\nAborting.")
         sys.exit(1)
-    except (UserError, NoSuchService, ConfigurationError, legacy.LegacyError) as e:
+    except (UserError, NoSuchService, ConfigurationError) as e:
         log.error(e.msg)
         sys.exit(1)
     except NoSuchCommand as e:
@@ -132,6 +129,7 @@ class TopLevelCommand(DocoptCommand):
 
     Commands:
       build              Build or rebuild services
+      config             Validate and view the compose file
       help               Get help on a command
       kill               Kill containers
       logs               View output from containers
@@ -147,9 +145,7 @@ class TopLevelCommand(DocoptCommand):
       stop               Stop services
       unpause            Unpause services
       up                 Create and start containers
-      migrate-to-labels  Recreate containers to add labels
       version            Show the Docker-Compose version information
-
     """
     base_dir = '.'
 
@@ -164,6 +160,10 @@ class TopLevelCommand(DocoptCommand):
         if options['COMMAND'] in ('help', 'version'):
             # Skip looking up the compose file.
             handler(None, command_options)
+            return
+
+        if options['COMMAND'] == 'config':
+            handler(options, command_options)
             return
 
         project = project_from_options(self.base_dir, options)
@@ -190,6 +190,36 @@ class TopLevelCommand(DocoptCommand):
             no_cache=bool(options.get('--no-cache', False)),
             pull=bool(options.get('--pull', False)),
             force_rm=bool(options.get('--force-rm', False)))
+
+    def config(self, config_options, options):
+        """
+        Validate and view the compose file.
+
+        Usage: config [options]
+
+        Options:
+            -q, --quiet     Only validate the configuration, don't print
+                            anything.
+            --services      Print the service names, one per line.
+
+        """
+        config_path = get_config_path_from_options(config_options)
+        compose_config = config.load(config.find(self.base_dir, config_path))
+
+        if options['--quiet']:
+            return
+
+        if options['--services']:
+            print('\n'.join(service['name'] for service in compose_config))
+            return
+
+        compose_config = dict(
+            (service.pop('name'), service) for service in compose_config)
+        print(yaml.dump(
+            compose_config,
+            default_flow_style=False,
+            indent=2,
+            width=80))
 
     def help(self, project, options):
         """
@@ -303,11 +333,7 @@ class TopLevelCommand(DocoptCommand):
 
         Options:
             --ignore-pull-failures  Pull what it can and ignores images with pull failures.
-            --allow-insecure-ssl    Deprecated - no effect.
         """
-        if options['--allow-insecure-ssl']:
-            log.warn(INSECURE_SSL_WARNING)
-
         project.pull(
             service_names=options['SERVICE'],
             ignore_pull_failures=options.get('--ignore-pull-failures')
@@ -352,7 +378,6 @@ class TopLevelCommand(DocoptCommand):
         Usage: run [options] [-p PORT...] [-e KEY=VAL...] SERVICE [COMMAND] [ARGS...]
 
         Options:
-            --allow-insecure-ssl  Deprecated - no effect.
             -d                    Detached mode: Run container in the background, print
                                   new container name.
             --name NAME           Assign a name to the container
@@ -375,9 +400,6 @@ class TopLevelCommand(DocoptCommand):
                 "Interactive mode is not yet supported on Windows.\n"
                 "Please pass the -d flag when using `docker-compose run`."
             )
-
-        if options['--allow-insecure-ssl']:
-            log.warn(INSECURE_SSL_WARNING)
 
         if options['COMMAND']:
             command = [options['COMMAND']] + options['ARGS']
@@ -514,7 +536,6 @@ class TopLevelCommand(DocoptCommand):
         Usage: up [options] [SERVICE...]
 
         Options:
-            --allow-insecure-ssl   Deprecated - no effect.
             -d                     Detached mode: Run containers in the background,
                                    print new container names.
             --no-color             Produce monochrome output.
@@ -528,9 +549,6 @@ class TopLevelCommand(DocoptCommand):
                                    when attached or when containers are already
                                    running. (default: 10)
         """
-        if options['--allow-insecure-ssl']:
-            log.warn(INSECURE_SSL_WARNING)
-
         monochrome = options['--no-color']
         start_deps = not options['--no-deps']
         service_names = options['SERVICE']
@@ -549,32 +567,6 @@ class TopLevelCommand(DocoptCommand):
         if not detached:
             log_printer = build_log_printer(to_attach, service_names, monochrome)
             attach_to_logs(project, log_printer, service_names, timeout)
-
-    def migrate_to_labels(self, project, _options):
-        """
-        Recreate containers to add labels
-
-        If you're coming from Compose 1.2 or earlier, you'll need to remove or
-        migrate your existing containers after upgrading Compose. This is
-        because, as of version 1.3, Compose uses Docker labels to keep track
-        of containers, and so they need to be recreated with labels added.
-
-        If Compose detects containers that were created without labels, it
-        will refuse to run so that you don't end up with two sets of them. If
-        you want to keep using your existing containers (for example, because
-        they have data volumes you want to preserve) you can migrate them with
-        the following command:
-
-            docker-compose migrate-to-labels
-
-        Alternatively, if you're not worried about keeping them, you can
-        remove them - Compose will just create new ones.
-
-            docker rm -f myapp_web_1 myapp_db_1 ...
-
-        Usage: migrate-to-labels
-        """
-        legacy.migrate_project_to_labels(project)
 
     def version(self, project, options):
         """
@@ -618,18 +610,10 @@ def run_one_off_container(container_options, project, service, options):
     if project.use_networking:
         project.ensure_network_exists()
 
-    try:
-        container = service.create_container(
-            quiet=True,
-            one_off=True,
-            **container_options)
-    except APIError:
-        legacy.check_for_legacy_containers(
-            project.client,
-            project.name,
-            [service.name],
-            allow_one_off=False)
-        raise
+    container = service.create_container(
+        quiet=True,
+        one_off=True,
+        **container_options)
 
     if options['-d']:
         container.start()
