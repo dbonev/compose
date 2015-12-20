@@ -187,17 +187,24 @@ class Project(object):
                     net_name))
 
     def start(self, service_names=None, **options):
+        containers = []
         for service in self.get_services(service_names):
-            service.start(**options)
+            service_containers = service.start(**options)
+            containers.extend(service_containers)
+        return containers
 
     def stop(self, service_names=None, **options):
         parallel.parallel_stop(self.containers(service_names), options)
 
     def pause(self, service_names=None, **options):
-        parallel.parallel_pause(reversed(self.containers(service_names)), options)
+        containers = self.containers(service_names)
+        parallel.parallel_pause(reversed(containers), options)
+        return containers
 
     def unpause(self, service_names=None, **options):
-        parallel.parallel_unpause(self.containers(service_names), options)
+        containers = self.containers(service_names)
+        parallel.parallel_unpause(containers, options)
+        return containers
 
     def kill(self, service_names=None, **options):
         parallel.parallel_kill(self.containers(service_names), options)
@@ -206,7 +213,9 @@ class Project(object):
         parallel.parallel_remove(self.containers(service_names, stopped=True), options)
 
     def restart(self, service_names=None, **options):
-        parallel.parallel_restart(self.containers(service_names, stopped=True), options)
+        containers = self.containers(service_names, stopped=True)
+        parallel.parallel_restart(containers, options)
+        return containers
 
     def build(self, service_names=None, no_cache=False, pull=False, force_rm=False):
         for service in self.get_services(service_names):
@@ -297,9 +306,13 @@ class Project(object):
     def ensure_network_exists(self):
         # TODO: recreate network if driver has changed?
         if self.get_network() is None:
+            driver_name = 'the default driver'
+            if self.network_driver:
+                driver_name = 'driver "{}"'.format(self.network_driver)
+
             log.info(
-                'Creating network "{}" with driver "{}"'
-                .format(self.name, self.network_driver)
+                'Creating network "{}" with {}'
+                .format(self.name, driver_name)
             )
             self.client.create_network(self.name, driver=self.network_driver)
 

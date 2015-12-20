@@ -59,6 +59,7 @@ DOCKER_START_KEYS = [
     'restart',
     'volumes_from',
     'security_opt',
+    'cpu_quota',
 ]
 
 
@@ -138,36 +139,10 @@ class Service(object):
         raise ValueError("No container found for %s_%s" % (self.name, number))
 
     def start(self, **options):
-        for c in self.containers(stopped=True):
+        containers = self.containers(stopped=True)
+        for c in containers:
             self.start_container_if_stopped(c, **options)
-
-    # TODO: remove these functions, project takes care of starting/stopping,
-    def stop(self, **options):
-        for c in self.containers():
-            log.info("Stopping %s" % c.name)
-            c.stop(**options)
-
-    def pause(self, **options):
-        for c in self.containers(filters={'status': 'running'}):
-            log.info("Pausing %s" % c.name)
-            c.pause(**options)
-
-    def unpause(self, **options):
-        for c in self.containers(filters={'status': 'paused'}):
-            log.info("Unpausing %s" % c.name)
-            c.unpause()
-
-    def kill(self, **options):
-        for c in self.containers():
-            log.info("Killing %s" % c.name)
-            c.kill(**options)
-
-    def restart(self, **options):
-        for c in self.containers(stopped=True):
-            log.info("Restarting %s" % c.name)
-            c.restart(**options)
-
-    # end TODO
+        return containers
 
     def scale(self, desired_num, timeout=DEFAULT_TIMEOUT):
         """
@@ -636,6 +611,7 @@ class Service(object):
             security_opt=options.get('security_opt'),
             ipc_mode=options.get('ipc'),
             cgroup_parent=options.get('cgroup_parent'),
+            cpu_quota=options.get('cpu_quota'),
         )
 
     def build(self, no_cache=False, pull=False, force_rm=False):
